@@ -1,0 +1,842 @@
+<?php
+
+/**
+ * Class QueryBuilder
+ */
+class QueryBuilder
+{
+
+    /**
+     * @var null
+     */
+    protected $table;
+
+    /**
+     * @var string
+     */
+    protected $primaryKey = 'id';
+
+    /**
+     * @var bool|null
+     */
+    protected $softDelete = null;
+
+    /**
+     * @var string|null
+     */
+    protected $softDeleteKey = null;
+
+    /**
+     * @var bool
+     */
+    private $qWithDeleted = false;
+
+    /**
+     * @var array
+     */
+    private $qWhere = [];
+
+    /**
+     * @var array
+     */
+    private $qParams = [];
+
+    /**
+     * @var array
+     */
+    private $qSelect = [];
+
+    /**
+     * @var array
+     */
+    private $qGroupBy = [];
+
+    /**
+     * @var array
+     */
+    private $qJoin = [];
+
+    /**
+     * @var array
+     */
+    private $qOrderby = [];
+
+    /**
+     * @var null
+     */
+    private $qLimit = null;
+
+    /**
+     * @var null
+     */
+    private $qOffset = null;
+
+    /**
+     * @var bool
+     */
+    private $groupStart = false;
+
+    /**
+     * @var array
+     */
+    private $groupWhere = [];
+
+    /**
+     * @var int
+     */
+    private $groupPosition = 0;
+
+    /**
+     * @var \PDO|null
+     */
+    private $conn = null;
+
+    /**
+     * QueryBuilder constructor.
+     *
+     * @param null   $table
+     * @param string $primaryKey
+     * @param bool   $softDelete
+     * @param string $softDeleteKey
+     */
+    public function __construct($table = null, $primaryKey = 'id', $softDelete = false, $softDeleteKey = 'deleted')
+    {
+        global $dbserver, $dbname, $dbuser, $dbpass;
+
+        if ($this->table === null && $table === null) {
+            $this->table = strtolower(__CLASS__);
+        } elseif ($this->table === null) {
+            $this->table = $table;
+        }
+
+        if ($this->primaryKey === null) {
+            $this->primaryKey = $primaryKey;
+        }
+
+        if ($this->softDelete === null) {
+            $this->softDelete = $softDelete;
+        }
+
+        if ($this->softDeleteKey === null) {
+            $this->softDeleteKey = $softDeleteKey;
+        }
+
+        try {
+            $this->conn = new PDO('mysql:host='.$dbserver.';dbname='.$dbname.';charset=latin1', $dbuser, $dbpass);
+            $this->conn->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        } catch (PDOException $e) {
+            echo 'Connection failed: '.$e->getMessage();
+        }
+    }
+
+    /**
+     * @param      $table
+     * @param null $alias
+     *
+     * @return $this
+     */
+    public function from($table, $alias = null)
+    {
+        $this->table = $alias ? "$table $alias" : $table;
+
+        return $this;
+    }
+
+    /**
+     * @param        $field
+     * @param string $direction
+     *
+     * @return $this
+     */
+    public function orderBy($field, $direction = 'ASC')
+    {
+        $direction = strtoupper($direction);
+        if ( ! in_array($direction, ['ASC', 'DESC'])) {
+            $direction = null;
+        }
+
+        $this->qOrderby[] = $field.($direction ? " ".$direction : "");
+
+        return $this;
+    }
+
+    /**
+     * @param $limit
+     *
+     * @return $this
+     */
+    public function limit($limit)
+    {
+        if ((int)$limit) {
+            $this->qLimit = $limit;
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param $offset
+     *
+     * @return $this
+     */
+    public function offset($offset)
+    {
+        if ((int)$offset) {
+            $this->qOffset = $offset;
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param $page
+     *
+     * @return $this
+     */
+    public function page($page)
+    {
+        if ($this->qLimit && (int)$page > 1) {
+            $this->qOffset = $this->qLimit * ($page - 1);
+        } else {
+            $this->qOffset = 0;
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param      $field
+     * @param null $value
+     * @param null $operator
+     * @param bool $or
+     *
+     * @return $this
+     */
+    public function where($field, $value = null, $operator = null, $or = false)
+    {
+        if ($value !== null) {
+            if ($operator === null) {
+                $operator = '=';
+            }
+
+            if ( ! is_array($value)) {
+                $this->qParams[] = $value;
+                $value = "?";
+            } else {
+                // Se for um array só funciona se o operador for um "IN" ou um "NOT IN"
+                if ($operator === null || ! in_array(strtoupper($operator), ['IN', 'NOT IN'])) {
+                    $operator = "IN";
+                }
+
+                $temp = "";
+                foreach ($value as $i => $val) {
+                    if ($i != 0) {
+                        $temp .= ", ";
+                    }
+
+                    $temp .= "?";
+                    $this->qParams[] = $val;
+                }
+
+                $value = "($temp)";
+            }
+        }
+
+        if ($operator !== null) {
+            $operator = strtoupper($operator);
+        }
+
+        $condition = [($or ? " OR" : " AND"), $field, $operator, $value];
+
+        if ($this->groupStart) {
+            $this->groupWhere[$this->groupPosition][] = $condition;
+            $condition = $this->groupPosition;
+        }
+
+        if ( ! in_array($condition, $this->qWhere)) {
+            $this->qWhere[] = $condition;
+        }
+
+
+        return $this;
+    }
+
+    /**
+     * @param      $field
+     * @param null $value
+     * @param null $operator
+     *
+     * @return \QueryBuilder
+     */
+    public function orWhere($field, $value = null, $operator = null)
+    {
+        return $this->where($field, $value, $operator, true);
+    }
+
+    /**
+     * @param mixed ...$fields
+     *
+     * @return $this
+     */
+    public function select(...$fields)
+    {
+        foreach ($fields as $field) {
+            if (is_array($field)) {
+                foreach ($field as $f) {
+                    $this->qSelect = array_merge($this->qSelect, [$f]);
+                }
+            } else {
+                $this->qSelect = array_merge($this->qSelect, [$field]);
+            }
+        }
+
+        if ($fields == '*') {
+            $this->qSelect = ['*'];
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param bool $seeParams
+     * @param bool $reset
+     *
+     * @return string
+     */
+    public function toSQL($seeParams = false, $reset = false)
+    {
+        $sql = "SELECT ";
+
+        if ( ! empty($this->qSelect)) {
+            $sql .= implode(', ', $this->qSelect);
+        } else {
+            $sql .= '*';
+        }
+
+        $sql .= " FROM {$this->table}";
+
+        if ( ! empty($this->qJoin)) {
+            $sql .= implode("", $this->qJoin);
+        }
+
+        $sql .= $this->compileWhere();
+
+        if ( ! empty($this->qGroupBy)) {
+            $sql .= " GROUP BY ".implode(", ", $this->qGroupBy);
+        }
+
+        if ( ! empty($this->qOrderby)) {
+            $sql .= " ORDER BY ".implode(", ", $this->qOrderby);
+        }
+
+        if ( ! empty($this->qLimit)) {
+            $sql .= " LIMIT ".$this->qLimit;
+        }
+
+        if ($this->qOffset !== null) {
+            $sql .= " OFFSET ".$this->qOffset;
+        }
+
+        if ($seeParams) {
+            $sql = $this->replaceParams($sql);
+        }
+
+        if ($reset) {
+            $this->reset();
+        }
+
+        return $sql;
+    }
+
+    /**
+     * @return int
+     */
+    public function count()
+    {
+        return (int)(clone $this)->select("COUNT({$this->primaryKey}) count")->get('count');
+    }
+
+    /**
+     * @param        $table
+     * @param        $condition
+     * @param string $type
+     *
+     * @return $this
+     */
+    public function join($table, $condition, $type = 'INNER')
+    {
+        $type = strtoupper($type);
+        if ( ! in_array($type, ['LEFT', 'RIGTH', 'INNER', 'FULL', ''])) {
+            $type = 'INNER';
+        }
+
+        $this->qJoin[] = " ".($type ? $type." " : "")."JOIN $table ON $condition";
+
+        return $this;
+    }
+
+    /**
+     * @param mixed ...$fields
+     *
+     * @return $this
+     */
+    public function groupBy(...$fields)
+    {
+        foreach ($fields as $field) {
+            if (is_array($field)) {
+                foreach ($field as $f) {
+                    $this->qGroupBy = array_merge($this->qGroupBy, [$f]);
+                }
+            } else {
+                $this->qGroupBy = array_merge($this->qGroupBy, [$field]);
+            }
+        }
+
+        return $this;
+    }
+
+    /**
+     * @param null $field
+     * @param bool $asObject
+     *
+     * @return mixed|null
+     */
+    public function get($field = null, $asObject = true)
+    {
+        if ($field !== null) {
+            $asObject = false;
+        }
+
+        try {
+            $query = $this->conn->prepare($this->toSQL());
+            $query->execute($this->qParams);
+
+            if ( ! $asObject) {
+                $result = $query->fetch(PDO::FETCH_ASSOC);
+            } else {
+                $result = $query->fetchObject(get_class($this));
+            }
+
+            $this->reset();
+
+            if ($result === false) {
+                return null;
+            }
+
+            return $field ? $result[$field] : $result;
+        } catch (PDOException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param bool $asObject
+     *
+     * @return array|null
+     */
+    public function all($asObject = true)
+    {
+        try {
+            $query = $this->conn->prepare($this->toSQL());
+            $query->execute($this->qParams);
+
+            if ( ! $asObject) {
+                $result = $query->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $result = $query->fetchAll(PDO::FETCH_CLASS);
+            }
+
+            $this->reset();
+
+            if ($result === false) {
+                return null;
+            }
+
+            return $result;
+        } catch (PDOException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param      $id
+     * @param bool $seeParams
+     * @param bool $reset
+     *
+     * @return string|string[]|null
+     */
+    public function deleteSQL($id, $seeParams = false, $reset = false)
+    {
+        if ($this->softDelete === false) {
+            $sql = "DELETE FROM {$this->table}";
+
+            if ($id !== null) {
+                $this->qWhere = [[" AND", $this->primaryKey, "=", "?"]];
+                $this->qParams = [$id];
+            }
+
+            $sql .= $this->compileWhere(true);
+
+            if ($seeParams) {
+                $sql = $this->replaceParams($sql);
+            }
+
+            return $sql;
+        } else {
+            $sql = "UPDATE {$this->table} SET {$this->softDeleteKey} = NOW()";
+
+            if ($id !== null) {
+                $this->qWhere = [[" AND", $this->primaryKey, "=", "?"]];
+                $this->qParams = [$id];
+            }
+
+            $sql .= $this->compileWhere(true);
+
+            if ($seeParams) {
+                $sql = $this->replaceParams($sql);
+            }
+
+            if ($reset) {
+                $this->reset();
+            }
+
+            return $sql;
+        }
+    }
+
+    /**
+     * @param null $id
+     *
+     * @return int|null
+     */
+    public function delete($id = null)
+    {
+        try {
+            $query = $this->conn->prepare($this->deleteSQL($id));
+            $query->execute($this->qParams);
+
+            $this->reset();
+
+            return (int)$query->rowCount();
+        } catch (PDOException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param      $params
+     * @param null $id
+     * @param bool $seeParams
+     * @param bool $reset
+     *
+     * @return string|string[]|null
+     */
+    public function updateSQL($params, $id = null, $seeParams = false, $reset = false)
+    {
+        $newParams = [];
+
+        $sql = "UPDATE {$this->table} SET ";
+
+        $first = true;
+        foreach ($params as $key => $value) {
+            if ($first === false) {
+                $sql .= ", ";
+            }
+
+            $sql .= "$key = ?";
+            $newParams[] = $value;
+            $first = false;
+        }
+
+        if ($id !== null) {
+            $this->qWhere = [[" AND", $this->primaryKey, "=", "?"]];
+            $this->qParams = [$id];
+        }
+
+        $sql .= $this->compileWhere(true);
+
+        $this->qParams = array_merge($newParams, $this->qParams);
+
+        if ($seeParams) {
+            $sql = $this->replaceParams($sql);
+        }
+
+        if ($reset) {
+            $this->reset();
+        }
+
+        return $sql;
+    }
+
+    /**
+     * @param      $params
+     * @param null $id
+     * @param bool $runTriggers
+     *
+     * @return int|null
+     */
+    public function update($params, $id = null, $runTriggers = true)
+    {
+        try {
+            if ($runTriggers) {
+                $this->beforeUpdate($params, $id);
+            }
+
+            $query = $this->conn->prepare($this->updateSQL($params, $id));
+            $query->execute($this->qParams);
+            $rowCount = (int)$query->rowCount();
+
+            $this->reset();
+
+            if ($runTriggers) {
+                $this->afterUpdate($params, $id);
+            }
+
+            return $rowCount;
+        } catch (PDOException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * @param      $params
+     * @param bool $seeParams
+     * @param bool $reset
+     *
+     * @return string|string[]|null
+     */
+    public function insertSQL($params, $seeParams = false, $reset = false)
+    {
+        $keys = implode(", ", array_keys($params));
+        $values = [];
+        for ($i = 0; $i < count($params); $i++) {
+            $values[] = "?";
+        }
+
+        $this->qParams = array_values($params);
+
+        $sql = "INSERT INTO {$this->table} ($keys) VALUE (".implode(", ", $values).")";
+
+        if ($seeParams) {
+            $sql = $this->replaceParams($sql);
+        }
+
+        if ($reset) {
+            $this->reset();
+        }
+
+        return $sql;
+    }
+
+    /**
+     * @param      $params
+     * @param bool $runTriggers
+     *
+     * @return int|null
+     */
+    public function insert($params, $runTriggers = true)
+    {
+        try {
+            if ($runTriggers) {
+                $this->beforeInsert($params);
+            }
+
+            $query = $this->conn->prepare($this->insertSQL($params));
+            $query->execute($this->qParams);
+            $insertedId = $this->conn->lastInsertId();
+
+            $this->reset();
+
+            if ($runTriggers) {
+                $this->afterInsert($params, $insertedId);
+            }
+
+            if ($insertedId !== false) {
+                return (int)$insertedId;
+            }
+        } catch (PDOException $e) {
+            return null;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return $this
+     */
+    public function whereGroupStart()
+    {
+        $this->groupStart = true;
+
+        return $this;
+    }
+
+    /**
+     * @return $this
+     */
+    public function whereGroupEnd()
+    {
+        $this->groupStart = false;
+        $this->groupPosition++;
+
+        return $this;
+    }
+
+    /**
+     * @param bool $softDeleteOveride
+     *
+     * @return string
+     */
+    private function compileWhere($softDeleteOveride = false)
+    {
+        $sql = "";
+        if ( ! empty($this->qWhere)) {
+            $sql = " WHERE ";
+            foreach ($this->qWhere as $i => $where) {
+                if (is_array($where)) {
+                    if ( ! $i) {
+                        unset($where[0]);
+                        array_filter($where);
+                    }
+
+                    $sql .= implode(" ", array_filter($where));
+                } else {
+                    // Groups
+                    if ( ! empty($this->groupWhere[$where])) {
+                        if ($i) {
+                            $sql .= $this->groupWhere[$where][0][0]." ";
+                        }
+                        $sql .= "(";
+                        foreach ($this->groupWhere[$where] as $j => $groupWhere) {
+                            if ( ! $j) {
+                                unset($groupWhere[0]);
+                                array_filter($groupWhere);
+                            }
+
+                            $sql .= implode(" ", array_filter($groupWhere));
+                        }
+                        $sql .= ")";
+                    }
+                }
+
+            }
+
+            if ($this->softDelete && ! $this->qWithDeleted && ! $softDeleteOveride) {
+                $sql .= " AND ({$this->softDeleteKey} IS NULL OR {$this->softDeleteKey} = '')";
+            }
+        } else {
+            if ($this->softDelete && ! $this->qWithDeleted && ! $softDeleteOveride) {
+                $sql .= " WHERE ({$this->softDeleteKey} IS NULL OR {$this->softDeleteKey} = '')";
+            }
+        }
+
+        return $sql;
+    }
+
+    /**
+     *
+     */
+    private function reset()
+    {
+        $this->qWhere = [];
+        $this->qParams = [];
+        $this->qSelect = [];
+        $this->qGroupBy = [];
+        $this->qJoin = [];
+        $this->qOrderby = [];
+        $this->qLimit = null;
+        $this->qOffset = null;
+    }
+
+    /**
+     * @param $params
+     */
+    protected function beforeInsert(&$params)
+    {
+    }
+
+    /**
+     * @param $params
+     * @param $insertedId
+     */
+    protected function afterInsert($params, $insertedId)
+    {
+    }
+
+    /**
+     * @param $params
+     * @param $id
+     */
+    protected function beforeUpdate(&$params, $id)
+    {
+    }
+
+    /**
+     * @param $params
+     * @param $id
+     */
+    protected function afterUpdate($params, $id)
+    {
+    }
+
+    /**
+     * @param $sql
+     *
+     * @return string|string[]|null
+     */
+    private function replaceParams($sql)
+    {
+        foreach ($this->qParams as $param) {
+            if ( ! is_numeric($param)) {
+                $param = "'$param'";
+            }
+
+            $sql = $this->str_replace_first("?", $param, $sql);
+        }
+
+        return $sql;
+    }
+
+    /**
+     * @param $from
+     * @param $to
+     * @param $content
+     *
+     * @return string|string[]|null
+     */
+    private static function str_replace_first($from, $to, $content)
+    {
+        $from = '/'.preg_quote($from, '/').'/';
+
+        return preg_replace($from, $to, $content, 1);
+    }
+
+    /**
+     * @return mixed
+     */
+    public function toArray()
+    {
+        return json_decode(json_encode($this), true);
+    }
+
+    /**
+     * @return int|null
+     */
+    public function save()
+    {
+        $params = $this->toArray();
+        if (!empty($params)) {
+            if (empty($params[$this->primaryKey])) {
+                return $this->insert($params);
+            } else {
+                $id = $params[$this->primaryKey];
+                unset($params[$this->primaryKey]);
+                return $this->update($params, $id);
+            }
+        }
+
+        return null;
+    }
+
+}
