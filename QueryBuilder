@@ -7,7 +7,7 @@ class QueryBuilder
 {
 
     /**
-     * @var null
+     * @var string
      */
     protected $table;
 
@@ -17,14 +17,14 @@ class QueryBuilder
     protected $primaryKey = 'id';
 
     /**
-     * @var bool|null
+     * @var bool
      */
-    protected $softDelete = null;
+    protected $softDelete = false;
 
     /**
-     * @var string|null
+     * @var string
      */
-    protected $softDeleteKey = null;
+    protected $softDeleteKey = 'deleted';
 
     /**
      * @var bool
@@ -62,12 +62,12 @@ class QueryBuilder
     private $qOrderby = [];
 
     /**
-     * @var null
+     * @var string|null
      */
     private $qLimit = null;
 
     /**
-     * @var null
+     * @var string|null
      */
     private $qOffset = null;
 
@@ -94,10 +94,10 @@ class QueryBuilder
     /**
      * QueryBuilder constructor.
      *
-     * @param null   $table
-     * @param string $primaryKey
-     * @param bool   $softDelete
-     * @param string $softDeleteKey
+     * @param string|null $table
+     * @param string      $primaryKey
+     * @param bool        $softDelete
+     * @param string      $softDeleteKey
      */
     public function __construct($table = null, $primaryKey = 'id', $softDelete = false, $softDeleteKey = 'deleted')
     {
@@ -131,8 +131,8 @@ class QueryBuilder
     }
 
     /**
-     * @param      $table
-     * @param null $alias
+     * @param             $table
+     * @param string|null $alias
      *
      * @return $this
      */
@@ -397,8 +397,8 @@ class QueryBuilder
     }
 
     /**
-     * @param null $field
-     * @param bool $asObject
+     * @param string|null $field
+     * @param bool        $asObject
      *
      * @return mixed|null
      */
@@ -506,13 +506,21 @@ class QueryBuilder
     }
 
     /**
-     * @param null $id
+     * @param mixed|null $id
      *
      * @return int|null
      */
     public function delete($id = null)
     {
         try {
+            if ($id === null) {
+                if ($params = $this->toArray()) {
+                    if ( ! empty($params[$this->primaryKey])) {
+                        $id = $params[$this->primaryKey];
+                    }
+                }
+            }
+
             $query = $this->conn->prepare($this->deleteSQL($id));
             $query->execute($this->qParams);
 
@@ -821,19 +829,27 @@ class QueryBuilder
     }
 
     /**
-     * @return int|null
+     * @return mixed|null
      */
     public function save()
     {
         $params = $this->toArray();
-        if (!empty($params)) {
+        if ( ! empty($params)) {
             if (empty($params[$this->primaryKey])) {
-                return $this->insert($params);
+                $id = $this->insert($params);
             } else {
                 $id = $params[$this->primaryKey];
                 unset($params[$this->primaryKey]);
-                return $this->update($params, $id);
+                $this->update($params, $id);
             }
+
+            if ($obj = $this->where('id', $id)->get(null, false)) {
+                foreach ($obj as $key => $value) {
+                    $this->{$key} = $value;
+                }
+            }
+
+            return $this;
         }
 
         return null;
