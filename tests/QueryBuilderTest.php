@@ -2,7 +2,7 @@
 
 use PHPUnit\Framework\TestCase;
 
-require dirname(__FILE__).'/../models/QueryBuilder.class.php';
+require dirname(__FILE__).'/../QueryBuilder.class.php';
 
 final class QueryBuilderTest extends TestCase
 {
