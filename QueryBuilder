@@ -1,5 +1,7 @@
 <?php
 
+require_once dirname(__FILE__).'/../funcao.php';
+
 /**
  * Class QueryBuilder
  */
@@ -7,86 +9,133 @@ class QueryBuilder
 {
 
     /**
+     * Database table name
+     *
      * @var string
      */
     protected $table;
 
     /**
+     * Databas table alias
+     *
+     * @var null
+     */
+    private $alias = null;
+
+    /**
+     * Database primary key field
+     *
      * @var string
      */
     protected $primaryKey = 'id';
 
     /**
+     * Database has soft deletes
+     *
      * @var bool
      */
     protected $softDelete = false;
 
     /**
+     * Database soft delete field
+     *
      * @var string
      */
     protected $softDeleteKey = 'deleted';
 
     /**
+     * Converts insert and updated params to empty strings if null
+     *
+     * @var bool
+     */
+    protected $nullToString = false;
+
+    /**
+     * If the querys show/use the deleted rows
+     *
      * @var bool
      */
     private $qWithDeleted = false;
 
     /**
+     * Array of where conditions
+     *
      * @var array
      */
     private $qWhere = [];
 
     /**
+     * Array of parameters for the where conditions
+     *
      * @var array
      */
     private $qParams = [];
 
     /**
+     * Array of fields to put in the SELECT
+     *
      * @var array
      */
     private $qSelect = [];
 
     /**
+     * Array of GROUP BY fields
+     *
      * @var array
      */
     private $qGroupBy = [];
 
     /**
+     * Array of JOINS
+     *
      * @var array
      */
     private $qJoin = [];
 
     /**
+     * Array of ORDER BY fields and directions
      * @var array
      */
     private $qOrderby = [];
 
     /**
-     * @var string|null
+     * Query Limit
+     *
+     * @var int|null
      */
     private $qLimit = null;
 
     /**
-     * @var string|null
+     * Query Offset (paging)
+     *
+     * @var int|null
      */
     private $qOffset = null;
 
     /**
+     * Defines if the next where conditions are within a group "(condition1 AND condition2 ...)"
+     *
      * @var bool
      */
     private $groupStart = false;
 
     /**
+     * Array of where conditions in a group
+     *
      * @var array
      */
     private $groupWhere = [];
 
     /**
+     * Position of the current group
+     *
      * @var int
      */
     private $groupPosition = 0;
 
     /**
+     * Connection to the Database
+     *
      * @var \PDO|null
      */
     private $conn = null;
@@ -94,14 +143,17 @@ class QueryBuilder
     /**
      * QueryBuilder constructor.
      *
-     * @param string|null $table
-     * @param string      $primaryKey
-     * @param bool        $softDelete
-     * @param string      $softDeleteKey
+     * @param int|null    $id if the class has a table gets the Object with this id
+     * @param string|null $table Database table name
+     * @param string      $primaryKey Database primary key field
+     * @param bool        $softDelete If table has soft deletes
+     * @param string      $softDeleteKey Database table soft delete key
+     *
+     * @return void|object
      */
-    public function __construct($table = null, $primaryKey = 'id', $softDelete = false, $softDeleteKey = 'deleted')
+    public function __construct($id = null, $table = null, $primaryKey = 'id', $softDelete = false, $softDeleteKey = 'deleted')
     {
-        global $dbserver, $dbname, $dbuser, $dbpass;
+        global $dbserver, $dbname, $dbuser, $dbpass, $conn;
 
         if ($this->table === null && $table === null) {
             $this->table = strtolower(__CLASS__);
@@ -121,31 +173,49 @@ class QueryBuilder
             $this->softDeleteKey = $softDeleteKey;
         }
 
-        try {
-            $this->conn = new PDO('mysql:host='.$dbserver.';dbname='.$dbname.';charset=latin1', $dbuser, $dbpass);
-            $this->conn->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-        } catch (PDOException $e) {
-            echo 'Connection failed: '.$e->getMessage();
+        if ($conn) {
+            $this->conn = $conn;
+        } else {
+            try {
+                $this->conn = new PDO('mysql:host='.$dbserver.';dbname='.$dbname.';charset=latin1', $dbuser, $dbpass);
+                $this->conn->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+                $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+
+            } catch (PDOException $e) {
+                $this->$this->debug('Connection failed: '.$e->getMessage());
+            }
         }
+
+        if ($id !== null) {
+            return $this->get($id);
+        }
+
+        return $this;
     }
 
+
     /**
-     * @param             $table
-     * @param string|null $alias
+     * Defines the Database table name
+     *
+     * @param string $table Database table name
+     * @param string|null $alias Alias for the table
      *
      * @return $this
      */
     public function from($table, $alias = null)
     {
-        $this->table = $alias ? "$table $alias" : $table;
+        $this->table = $table;
+        $this->alias = $alias;
 
         return $this;
     }
 
     /**
-     * @param        $field
-     * @param string $direction
+     * Adds ORDER BY condition
+     *
+     * @param string $field Database field name
+     * @param string $direction Direction of the field ['ASC' or 'DESC']
      *
      * @return $this
      */
@@ -162,7 +232,9 @@ class QueryBuilder
     }
 
     /**
-     * @param $limit
+     * Defines the LIMIT of the query
+     *
+     * @param int $limit Limit of the query
      *
      * @return $this
      */
@@ -176,7 +248,9 @@ class QueryBuilder
     }
 
     /**
-     * @param $offset
+     * Defines the OFFSET of the query (used for paging)
+     *
+     * @param int $offset Offset of the query
      *
      * @return $this
      */
@@ -190,7 +264,9 @@ class QueryBuilder
     }
 
     /**
-     * @param $page
+     * Defines the offset based on the limit and the page
+     *
+     * @param int $page Page to be shown
      *
      * @return $this
      */
@@ -206,10 +282,12 @@ class QueryBuilder
     }
 
     /**
-     * @param      $field
-     * @param null $value
-     * @param null $operator
-     * @param bool $or
+     * Adds a where condition to the query
+     *
+     * @param string $field Can be a field or a RAW QUERY if the other parameters are empty
+     * @param mixed $value Value to be compared
+     * @param string|null $operator Operator of the condition
+     * @param bool $or If the condition is a AND or a OR
      *
      * @return $this
      */
@@ -254,20 +332,20 @@ class QueryBuilder
             $condition = $this->groupPosition;
         }
 
-        if ( ! in_array($condition, $this->qWhere)) {
+        if (!$this->groupStart || !in_array($condition, $this->qWhere)) {
             $this->qWhere[] = $condition;
         }
-
 
         return $this;
     }
 
     /**
-     * @param      $field
-     * @param null $value
-     * @param null $operator
+     * The same as the where function but forces a OR condition
+     * @param string $field Can be a field or a RAW QUERY if the other parameters are empty
+     * @param mixed $value Value to be compared
+     * @param string|null $operator Operator of the condition
      *
-     * @return \QueryBuilder
+     * @return $this
      */
     public function orWhere($field, $value = null, $operator = null)
     {
@@ -275,12 +353,13 @@ class QueryBuilder
     }
 
     /**
-     * @param mixed ...$fields
+     * Defines the select fields of the query, you can add a single field or and array of fields
      *
      * @return $this
      */
-    public function select(...$fields)
+    public function select()
     {
+        $fields = func_get_args();
         foreach ($fields as $field) {
             if (is_array($field)) {
                 foreach ($field as $f) {
@@ -299,8 +378,10 @@ class QueryBuilder
     }
 
     /**
-     * @param bool $seeParams
-     * @param bool $reset
+     * Creates the query to use on the fetch or all function
+     *
+     * @param bool $seeParams Returns the query with the parameters
+     * @param bool $reset Calls the reset function in the end
      *
      * @return string
      */
@@ -314,7 +395,7 @@ class QueryBuilder
             $sql .= '*';
         }
 
-        $sql .= " FROM {$this->table}";
+        $sql .= " FROM {$this->table}".($this->alias ? " ".$this->alias : "");
 
         if ( ! empty($this->qJoin)) {
             $sql .= implode("", $this->qJoin);
@@ -350,17 +431,27 @@ class QueryBuilder
     }
 
     /**
+     * Returns the count withou the limit or offset
+     *
+     * @param bool $addDistinct Adds a DISTINCT to the query
+     *
      * @return int
      */
-    public function count()
+    public function count($addDistinct = false)
     {
-        return (int)(clone $this)->select("COUNT({$this->primaryKey}) count")->get('count');
+        $clone = clone $this;
+        $clone->qSelect = [];
+        $clone->qLimit = null;
+        $clone->qOffset = null;
+
+        return (int)$clone->select("COUNT(".($addDistinct ? "DISTINCT " : "").($this->alias ?: $this->table).".{$this->primaryKey}) count")->fetch('count');
     }
 
     /**
-     * @param        $table
-     * @param        $condition
-     * @param string $type
+     * Adds a join condition
+     * @param string $table Database name
+     * @param string $condition Condition to be connectect or "ON" for short
+     * @param string $type Type of JOIN
      *
      * @return $this
      */
@@ -377,12 +468,13 @@ class QueryBuilder
     }
 
     /**
-     * @param mixed ...$fields
+     * Adds a GROUP BY field, you can add a single field or and array of fields
      *
      * @return $this
      */
-    public function groupBy(...$fields)
+    public function groupBy()
     {
+        $fields = func_get_args();
         foreach ($fields as $field) {
             if (is_array($field)) {
                 foreach ($field as $f) {
@@ -397,12 +489,36 @@ class QueryBuilder
     }
 
     /**
+     * @param      $id
+     * @param null $field
+     * @param bool $asObject
+     *
+     * @return $this|mixed|null
+     */
+    public function get($id, $field = null, $asObject = true)
+    {
+        if ($field !== null) {
+            $asObject = false;
+        }
+        $obj = $this->where($this->primaryKey, $id)->fetch($field, $asObject);
+        if ($obj && $asObject === true) {
+            foreach ($obj as $key => $value) {
+                $this->{$key} = $value;
+            }
+        } else {
+            return $obj;
+        }
+
+        return $this;
+    }
+
+    /**
      * @param string|null $field
      * @param bool        $asObject
      *
      * @return mixed|null
      */
-    public function get($field = null, $asObject = true)
+    public function fetch($field = null, $asObject = true)
     {
         if ($field !== null) {
             $asObject = false;
@@ -426,6 +542,8 @@ class QueryBuilder
 
             return $field ? $result[$field] : $result;
         } catch (PDOException $e) {
+            $this->debug($e->getMessage()."\n".$this->toSQL(true));
+
             return null;
         }
     }
@@ -455,6 +573,8 @@ class QueryBuilder
 
             return $result;
         } catch (PDOException $e) {
+            $this->debug($e->getMessage()."\n".$this->toSQL(true));
+
             return null;
         }
     }
@@ -469,7 +589,7 @@ class QueryBuilder
     public function deleteSQL($id, $seeParams = false, $reset = false)
     {
         if ($this->softDelete === false) {
-            $sql = "DELETE FROM {$this->table}";
+            $sql = "DELETE FROM {$this->table}".($this->alias ? " ".$this->alias : "");
 
             if ($id !== null) {
                 $this->qWhere = [[" AND", $this->primaryKey, "=", "?"]];
@@ -528,6 +648,8 @@ class QueryBuilder
 
             return (int)$query->rowCount();
         } catch (PDOException $e) {
+            $this->debug($e->getMessage()."\n".$this->deleteSQL($id, true));
+
             return null;
         }
     }
@@ -552,8 +674,13 @@ class QueryBuilder
                 $sql .= ", ";
             }
 
-            $sql .= "$key = ?";
-            $newParams[] = $value;
+            if ($value !== null || ($value === null && $this->nullToString === true)) {
+                $sql .= "$key = ?";
+                $newParams[] = "$value";
+            } else {
+                $sql .= "$key = NULL";
+            }
+
             $first = false;
         }
 
@@ -603,6 +730,8 @@ class QueryBuilder
 
             return $rowCount;
         } catch (PDOException $e) {
+            $this->debug($e->getMessage()."\n".$this->updateSQL($params, $id, true));
+
             return null;
         }
     }
@@ -616,13 +745,21 @@ class QueryBuilder
      */
     public function insertSQL($params, $seeParams = false, $reset = false)
     {
+        $newParams = [];
+
         $keys = implode(", ", array_keys($params));
         $values = [];
-        for ($i = 0; $i < count($params); $i++) {
-            $values[] = "?";
+
+        foreach($params as $value) {
+            if ($value !== null || ($value === null && $this->nullToString === true)) {
+                $values[] = "?";
+                $newParams[] = "$value";
+            } else {
+                $values[] = "NULL";
+            }
         }
 
-        $this->qParams = array_values($params);
+        $this->qParams = $newParams;
 
         $sql = "INSERT INTO {$this->table} ($keys) VALUE (".implode(", ", $values).")";
 
@@ -664,6 +801,8 @@ class QueryBuilder
                 return (int)$insertedId;
             }
         } catch (PDOException $e) {
+            $this->debug($e->getMessage()."\n".$this->insertSQL($params, true));
+
             return null;
         }
 
@@ -747,14 +886,8 @@ class QueryBuilder
      */
     private function reset()
     {
-        $this->qWhere = [];
-        $this->qParams = [];
-        $this->qSelect = [];
-        $this->qGroupBy = [];
-        $this->qJoin = [];
-        $this->qOrderby = [];
-        $this->qLimit = null;
-        $this->qOffset = null;
+        $this->qWhere = $this->qParams = $this->qSelect = $this->qGroupBy = $this->qJoin = $this->qOrderby = [];
+        $this->qLimit = $this->qOffset = null;
     }
 
     /**
@@ -796,28 +929,12 @@ class QueryBuilder
     private function replaceParams($sql)
     {
         foreach ($this->qParams as $param) {
-            if ( ! is_numeric($param)) {
-                $param = "'$param'";
-            }
+            $param = "'$param'";
 
-            $sql = $this->str_replace_first("?", $param, $sql);
+            $sql = str_replace_first("?", $param, $sql);
         }
 
         return $sql;
-    }
-
-    /**
-     * @param $from
-     * @param $to
-     * @param $content
-     *
-     * @return string|string[]|null
-     */
-    private static function str_replace_first($from, $to, $content)
-    {
-        $from = '/'.preg_quote($from, '/').'/';
-
-        return preg_replace($from, $to, $content, 1);
     }
 
     /**
@@ -825,25 +942,27 @@ class QueryBuilder
      */
     public function toArray()
     {
-        return json_decode(json_encode($this), true);
+        return objectToArray($this);
     }
 
     /**
+     * @param bool $runTriggers
+     *
      * @return mixed|null
      */
-    public function save()
+    public function save($runTriggers = true)
     {
         $params = $this->toArray();
         if ( ! empty($params)) {
             if (empty($params[$this->primaryKey])) {
-                $id = $this->insert($params);
+                $id = $this->insert($params, $runTriggers);
             } else {
                 $id = $params[$this->primaryKey];
                 unset($params[$this->primaryKey]);
-                $this->update($params, $id);
+                $this->update($params, $id, $runTriggers);
             }
 
-            if ($obj = $this->where('id', $id)->get(null, false)) {
+            if ($obj = $this->get($id, false)) {
                 foreach ($obj as $key => $value) {
                     $this->{$key} = $value;
                 }
@@ -855,4 +974,75 @@ class QueryBuilder
         return null;
     }
 
+    /**
+     * @param $val
+     */
+    private function debug($val)
+    {
+        $val .= "
+        <fieldset><legend>".__CLASS__."</legend>Table: $this->table $this->alias\nPrimaryKey: $this->primaryKey\nSoftDelete: ".($this->softDelete ? 'Yes ('.$this->softDeleteKey.')' : 'No')."\nLimit: $this->qLimit\nOffset: $this->qOffset</fieldset>
+        <fieldset><legend>qSelect</legend><pre>".print_r($this->qSelect, true)."</pre></fieldset>
+        <fieldset><legend>qJoin</legend><pre>".print_r($this->qJoin, true)."</pre></fieldset>
+        <fieldset><legend>qWhere</legend><pre>".print_r($this->qWhere, true)."</pre></fieldset>
+        <fieldset><legend>groupWhere</legend><pre>".print_r($this->groupWhere, true)."</pre></fieldset>
+        <fieldset><legend>qParams</legend><pre>".print_r($this->qParams, true)."</pre></fieldset>
+        <fieldset><legend>qGroupBy</legend><pre>".print_r($this->qGroupBy, true)."</pre></fieldset>
+        <fieldset><legend>qOrderBy</legend><pre>".print_r($this->qOrderby, true)."</pre></fieldset>
+        ";
+
+        debug($val);
+    }
+
+    /**
+     * Returns an array of the inputed field
+     * @param string $field The database field name
+     * @param string|null $key Changes the array to a relation array $key => $field
+     *
+     * @return array|null
+     */
+    public function dropdown($field, $key = null)
+    {
+        $return = null;
+
+        if ($rows = $this->all()) {
+            foreach ($rows as $row) {
+                if ($key === null) {
+                    $return[] = $row->{$field};
+                } else {
+                    $return[$row->{$key}] = $row->{$field};
+                }
+            }
+        }
+
+        return $return;
+    }
+
+    /**
+     *
+     * Copies the selected row and changes the fields according to the replaceFields array
+     *
+     * @param int $id Id of the row to copy
+     * @param array $replaceFields Array of fields to change in the new row
+     *
+     * @return int|null
+     */
+    public function copy($id, $replaceFields = [])
+    {
+        $clone = clone $this;
+        if ($clone->get($id)) {
+            $params = $clone->toArray();
+
+            unset($params[$this->primaryKey]);
+
+            if (!empty($replaceFields)) {
+                foreach ($replaceFields as $key => $value) {
+                    $params[$key] = $value;
+                }
+            }
+
+            return $this->insert($params);
+        }
+
+        return null;
+    }
 }
